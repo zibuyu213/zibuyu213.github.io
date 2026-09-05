@@ -1,0 +1,257 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>关于 · 子不语的博客</title>
+<meta name="description" content="一个简单、干净的极简博客。">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<header class="site-header">
+  <div class="container header-inner">
+    <a class="site-title" href="/">子不语的博客</a>
+    <nav>
+      <a href="/" class="">首页</a>
+      <a href="/about" class="active">关于</a>
+    </nav>
+  </div>
+</header>
+<main class="container"><article class="post"><h1>关于</h1><div class="content"><p>你好，我是这个博客的作者。</p>
+<p>这里是我的个人空间，用来记录学习笔记、生活随笔和奇思妙想。</p>
+<p>欢迎通过页面底部的链接或联系方式与我交流。</p>
+<blockquote><p>简单，就是最好的开始。</p></blockquote></div></article></main>
+<footer class="site-footer">
+  <div class="container">© 2026 子不语的博客</div>
+</footer>
+<div id="music-player" class="music-player">
+  <audio id="music-audio"></audio>
+  <button id="music-prev" class="mp-btn" title="上一首">⏮</button>
+  <button id="music-toggle" class="mp-btn mp-main" title="播放/暂停">▶</button>
+  <button id="music-next" class="mp-btn" title="下一首">⏭</button>
+  <div class="mp-info">
+    <div id="music-title" class="mp-title">暂无音乐</div>
+    <div class="mp-progress"><div id="music-progress-bar" class="mp-progress-bar"></div></div>
+  </div>
+</div>
+
+<script>(function () {
+  var audio = document.getElementById('music-audio');
+  var titleEl = document.getElementById('music-title');
+  var toggleBtn = document.getElementById('music-toggle');
+  var prevBtn = document.getElementById('music-prev');
+  var nextBtn = document.getElementById('music-next');
+  var bar = document.getElementById('music-progress-bar');
+  var list = [];
+  var index = 0;
+
+  function shuffle(a) {
+    for (var i = a.length - 1; i > 0; i--) {
+      var j = Math.floor(Math.random() * (i + 1));
+      var t = a[i]; a[i] = a[j]; a[j] = t;
+    }
+    return a;
+  }
+
+  function pick(i) {
+    if (!list.length) return;
+    index = ((i % list.length) + list.length) % list.length;
+    var track = list[index];
+    audio.src = track.url;
+    titleEl.textContent = track.title;
+  }
+
+  function playRandom() {
+    if (!list.length) return;
+    var next = Math.floor(Math.random() * list.length);
+    if (list.length > 1 && next === index) next = (next + 1) % list.length;
+    pick(next);
+    audio.play().catch(function () {});
+  }
+
+  // 自动播放：先尝试直接播放，被浏览器拦截则等首次交互后播放
+  var autoStarted = false;
+  function tryPlay() {
+    if (autoStarted) return;
+    autoStarted = true;
+    audio.play().catch(function () {
+      var orig = titleEl.textContent;
+      titleEl.textContent = orig + '（点击页面任意位置播放）';
+      var handler = function () {
+        audio.play().catch(function () {});
+        titleEl.textContent = orig;
+        document.removeEventListener('click', handler);
+        document.removeEventListener('keydown', handler);
+        document.removeEventListener('touchstart', handler);
+      };
+      document.addEventListener('click', handler);
+      document.addEventListener('keydown', handler);
+      document.addEventListener('touchstart', handler);
+    });
+  }
+
+  // 本地音乐：绝对路径文件夹 / public/music/playlist.json
+  function startLocal(cfg) {
+    var local = (cfg && cfg.local) || {};
+    if (local.type === 'folder') {
+      // 由服务器扫描绝对路径文件夹，生成播放列表
+      fetch('/api/music/playlist')
+        .then(function (r) { if (!r.ok) throw new Error('no music'); return r.json(); })
+        .then(function (tracks) {
+          list = shuffle(tracks || []);
+          if (list.length) { pick(0); tryPlay(); }
+        })
+        .catch(function () {});
+      return;
+    }
+    // 默认：读取 public/music/playlist.json
+    var url = local.playlist || '/music/playlist.json';
+    fetch(url)
+      .then(function (r) { if (!r.ok) throw new Error('no music'); return r.json(); })
+      .then(function (tracks) {
+        list = shuffle((tracks || []).map(function (t) {
+          return { url: '/music/' + t.file, title: t.title || t.file };
+        }));
+        if (list.length) { pick(0); tryPlay(); }
+      })
+      .catch(function () {});
+  }
+
+  // 在线音乐：Audius 免费开源音乐平台
+  function startOnline(cfg) {
+    var api = (cfg && cfg.online && cfg.online.api) ||
+      'https://discoveryprovider.audius.co/v1/tracks/trending?app_name=myblog';
+    fetch(api)
+      .then(function (r) { if (!r.ok) throw new Error('bad'); return r.json(); })
+      .then(function (json) {
+        var tracks = (json.data || []).filter(function (t) {
+          return t && t.stream && t.stream.url;
+        }).map(function (t) {
+          var artist = (t.user && t.user.name) || '';
+          return {
+            url: t.stream.url,
+            title: (t.title || '未知曲目') + (artist ? ' - ' + artist : '')
+          };
+        });
+        if (tracks.length) { list = shuffle(tracks); pick(0); tryPlay(); return; }
+        throw new Error('empty');
+      })
+      .catch(function () { startLocal(cfg); });
+  }
+
+  // 读取配置文件 public/music.config.json，按 mode 决定来源
+  fetch('/music.config.json')
+    .then(function (r) { if (!r.ok) throw new Error('no config'); return r.json(); })
+    .then(function (cfg) {
+      var mode = (cfg && cfg.mode) || 'online';
+      if (mode === 'local') startLocal(cfg);
+      else if (mode === 'off') titleEl.textContent = '音乐已关闭';
+      else startOnline(cfg);
+    })
+    .catch(function () { startOnline(null); });
+
+  toggleBtn.addEventListener('click', function () {
+    if (!list.length) return;
+    if (audio.paused) { audio.play().catch(function () {}); }
+    else { audio.pause(); }
+  });
+
+  prevBtn.addEventListener('click', function () { pick(index - 1); audio.play().catch(function () {}); });
+  nextBtn.addEventListener('click', playRandom);
+
+  audio.addEventListener('play', function () { toggleBtn.textContent = '⏸'; });
+  audio.addEventListener('pause', function () { toggleBtn.textContent = '▶'; });
+  audio.addEventListener('ended', playRandom);
+  audio.addEventListener('error', function () { playRandom(); });
+  audio.addEventListener('timeupdate', function () {
+    if (audio.duration) {
+      bar.style.width = (audio.currentTime / audio.duration * 100) + '%';
+    }
+  });
+})();</script>
+<script>(function () {
+  var main = document.querySelector('main.container');
+  if (!main) return;
+
+  function updateNav(pathname) {
+    var isAbout = (pathname === '/about');
+    var links = document.querySelectorAll('.site-header nav a');
+    for (var i = 0; i < links.length; i++) {
+      var a = links[i];
+      if (a.getAttribute('href') === '/about') {
+        a.classList.toggle('active', isAbout);
+      } else {
+        a.classList.toggle('active', !isAbout);
+      }
+    }
+  }
+
+  function applyPage(doc, url) {
+    var newMain = doc.querySelector('main.container');
+    if (newMain) main.innerHTML = newMain.innerHTML;
+    if (doc.title) document.title = doc.title;
+    var pathname = new URL(url, location.origin).pathname;
+    updateNav(pathname);
+    window.scrollTo(0, 0);
+  }
+
+  function navigate(url, push) {
+    fetch(url, { headers: { 'X-Requested-With': 'fetch' } })
+      .then(function (res) {
+        if (!res.ok) throw new Error('bad status');
+        return res.text();
+      })
+      .then(function (html) {
+        var doc = new DOMParser().parseFromString(html, 'text/html');
+        applyPage(doc, url);
+        if (push) history.pushState({ url: url }, '', url);
+      })
+      .catch(function () {
+        location.href = url;
+      });
+  }
+
+  document.addEventListener('click', function (e) {
+    var el = e.target;
+    var a = el && el.closest ? el.closest('a') : null;
+    if (!a) return;
+    if (a.target === '_blank') return;
+    if (a.hasAttribute('download')) return;
+    var href = a.getAttribute('href');
+    if (!href) return;
+    if (href.charAt(0) === '#') return;
+    var u;
+    try { u = new URL(href, location.href); } catch (_) { return; }
+    if (u.origin !== location.origin) return;
+    e.preventDefault();
+    navigate(u.pathname + u.search, true);
+  });
+
+  window.addEventListener('popstate', function () {
+    navigate(location.pathname + location.search, false);
+  });
+})();</script>
+<script>(function () {
+  document.addEventListener('click', function (e) {
+    var item = e.target && e.target.closest ? e.target.closest('.category-item') : null;
+    if (!item) return;
+    var cat = item.getAttribute('data-category');
+    var items = document.querySelectorAll('.category-item');
+    for (var i = 0; i < items.length; i++) {
+      items[i].classList.toggle('active', items[i] === item);
+    }
+    var cards = document.querySelectorAll('.post-card');
+    var shown = 0;
+    for (var i = 0; i < cards.length; i++) {
+      var cardCat = cards[i].getAttribute('data-category');
+      var show = (cat === 'all' || cardCat === cat);
+      cards[i].style.display = show ? '' : 'none';
+      if (show) shown++;
+    }
+    var noResults = document.querySelector('.posts .no-results');
+    if (noResults) noResults.style.display = shown === 0 ? '' : 'none';
+  });
+})();</script>
+</body>
+</html>
