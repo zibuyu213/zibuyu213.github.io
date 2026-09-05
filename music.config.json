@@ -1,0 +1,10 @@
+{
+  "mode": "local",
+  "online": {
+    "api": "https://discoveryprovider.audius.co/v1/tracks/trending?app_name=myblog"
+  },  
+  "local": {
+    "type": "playlist",
+    "playlist": "/music/playlist.json"
+  }
+}
