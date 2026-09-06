@@ -14,6 +14,7 @@
     <a class="site-title" href="/">子不语的博客</a>
     <nav>
       <a href="/" class="active">首页</a>
+      <a href="/gallery" class="">画廊</a>
       <a href="/about" class="">关于</a>
     </nav>
   </div>
@@ -188,15 +189,10 @@
   if (!main) return;
 
   function updateNav(pathname) {
-    var isAbout = (pathname === '/about');
     var links = document.querySelectorAll('.site-header nav a');
     for (var i = 0; i < links.length; i++) {
       var a = links[i];
-      if (a.getAttribute('href') === '/about') {
-        a.classList.toggle('active', isAbout);
-      } else {
-        a.classList.toggle('active', !isAbout);
-      }
+      a.classList.toggle('active', a.getAttribute('href') === pathname);
     }
   }
 
@@ -206,6 +202,9 @@
     if (doc.title) document.title = doc.title;
     var pathname = new URL(url, location.origin).pathname;
     updateNav(pathname);
+    if (document.getElementById('gallery-grid')) {
+      document.dispatchEvent(new Event('gallery:render'));
+    }
     window.scrollTo(0, 0);
   }
 
@@ -265,6 +264,175 @@
     var noResults = document.querySelector('.posts .no-results');
     if (noResults) noResults.style.display = shown === 0 ? '' : 'none';
   });
+})();</script>
+<script>(function () {
+  function esc(s) {
+    return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+  }
+
+  // ===== 弹窗 Lightbox =====
+  var lb, lbImg, lbContent, lbInfo, lbClose;
+  var zoom = 1, panX = 0, panY = 0;
+  var dragging = false, didDrag = false, startX = 0, startY = 0;
+
+  function initLightbox() {
+    if (document.getElementById('lightbox')) return;
+    var div = document.createElement('div');
+    div.id = 'lightbox';
+    div.className = 'lightbox';
+    div.innerHTML =
+      '<span class="lightbox-close" id="lightbox-close">&#10005;</span>' +
+      '<div class="lightbox-content" id="lightbox-content">' +
+        '<img id="lightbox-img" draggable="false" />' +
+      '</div>' +
+      '<div class="lightbox-info" id="lightbox-info"></div>';
+    document.body.appendChild(div);
+
+    lb = div;
+    lbImg = document.getElementById('lightbox-img');
+    lbContent = document.getElementById('lightbox-content');
+    lbInfo = document.getElementById('lightbox-info');
+    lbClose = document.getElementById('lightbox-close');
+
+    // 关闭
+    lbClose.addEventListener('click', closeLightbox);
+    lb.addEventListener('click', function (e) {
+      if (didDrag) { didDrag = false; return; }
+      if (e.target === lb || e.target === lbContent) closeLightbox();
+    });
+
+    // 键盘
+    document.addEventListener('keydown', function (e) {
+      if (!lb.classList.contains('active')) return;
+      if (e.key === 'Escape') closeLightbox();
+    });
+
+    // 滚轮缩放（以鼠标光标为锚点）
+    lb.addEventListener('wheel', function (e) {
+      e.preventDefault();
+      var rect = lbImg.getBoundingClientRect();
+      var cx = rect.left + rect.width / 2;
+      var cy = rect.top + rect.height / 2;
+      var oldZoom = zoom;
+      var delta = e.deltaY > 0 ? -0.15 : 0.15;
+      zoom = Math.max(0.2, Math.min(5, oldZoom + delta));
+      // 调整 pan 使光标下的图像点保持不动
+      var mx = e.clientX - cx;
+      var my = e.clientY - cy;
+      panX = panX - mx * (zoom - oldZoom) / oldZoom;
+      panY = panY - my * (zoom - oldZoom) / oldZoom;
+      applyTransform();
+    }, { passive: false });
+
+    // 拖拽平移（放大后可拖动，以鼠标为锚点）
+    lb.addEventListener('mousedown', function (e) {
+      if (zoom <= 1) return;
+      if (e.target === lbClose || e.target === lbInfo) return;
+      dragging = true;
+      didDrag = false;
+      startX = e.clientX - panX;
+      startY = e.clientY - panY;
+      lbImg.style.cursor = 'grabbing';
+      e.preventDefault();
+    });
+    document.addEventListener('mousemove', function (e) {
+      if (!dragging) return;
+      didDrag = true;
+      panX = e.clientX - startX;
+      panY = e.clientY - startY;
+      applyTransform();
+    });
+    document.addEventListener('mouseup', function () {
+      if (dragging) {
+        dragging = false;
+        applyTransform();
+      }
+    });
+
+    // 双击重置
+    lbImg.addEventListener('dblclick', function () {
+      zoom = 1; panX = 0; panY = 0;
+      applyTransform();
+    });
+  }
+
+  function applyTransform() {
+    lbImg.style.transform = 'translate(' + panX + 'px,' + panY + 'px) scale(' + zoom + ')';
+    lb.style.cursor = zoom > 1 ? 'grab' : 'default';
+    lbImg.style.cursor = zoom > 1 ? 'grab' : 'default';
+  }
+
+  function openLightbox(url, title, author, age) {
+    initLightbox();
+    zoom = 1; panX = 0; panY = 0;
+    lbImg.src = url;
+    lbImg.style.transform = 'translate(0,0) scale(1)';
+    lbInfo.textContent = title + (author ? '  ·  ' + author + (age ? '(' + age + ')' : '') : '');
+    lb.classList.add('active');
+    document.body.style.overflow = 'hidden';
+  }
+
+  function closeLightbox() {
+    if (!lb) return;
+    lb.classList.remove('active');
+    document.body.style.overflow = '';
+  }
+
+  // ===== 渲染画廊 =====
+  function renderGallery() {
+    var grid = document.getElementById('gallery-grid');
+    if (!grid) return;
+    fetch('/api/gallery/list')
+      .then(function (r) {
+        if (!r.ok) throw new Error('not ok');
+        return r.json();
+      })
+      .catch(function () {
+        return fetch('/gallery/list.json').then(function (r) { return r.json(); });
+      })
+      .then(function (items) {
+        if (!items || !items.length) {
+          grid.innerHTML = '<p class="empty">暂无绘画作品</p>';
+          return;
+        }
+        var html = '';
+        for (var i = 0; i < items.length; i++) {
+          var it = items[i];
+          var meta = it.author
+            ? esc(it.author) + (it.age ? '(' + esc(it.age) + ')' : '')
+            : '';
+          html += '<div class="gallery-card" data-url="' + esc(it.url) + '" data-title="' + esc(it.title) + '" data-author="' + esc(it.author) + '" data-age="' + esc(it.age) + '">' +
+            '<img src="' + esc(it.url) + '" alt="' + esc(it.title) + '" loading="lazy">' +
+            '<div class="gallery-title">' + esc(it.title) + '</div>' +
+            (meta ? '<div class="gallery-meta">' + meta + '</div>' : '') +
+            '</div>';
+        }
+        grid.innerHTML = html;
+      })
+      .catch(function () {
+        grid.innerHTML = '<p class="empty">加载失败</p>';
+      });
+  }
+
+  // 点击卡片打开弹窗（事件委托，兼容 SPA）
+  document.addEventListener('click', function (e) {
+    var card = e.target && e.target.closest ? e.target.closest('.gallery-card') : null;
+    if (!card) return;
+    var url = card.getAttribute('data-url');
+    if (!url) return;
+    e.preventDefault();
+    openLightbox(
+      url,
+      card.getAttribute('data-title') || '',
+      card.getAttribute('data-author') || '',
+      card.getAttribute('data-age') || ''
+    );
+  });
+
+  // 页面加载时如果有画廊则渲染
+  if (document.getElementById('gallery-grid')) renderGallery();
+  // SPA 导航后重新渲染
+  document.addEventListener('gallery:render', renderGallery);
 })();</script>
 </body>
 </html>
